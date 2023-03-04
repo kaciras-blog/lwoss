@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Title</title>
+</head>
+<body>
+<input id='input' type='file'>
+
+<script>
+const input = document.getElementById("input");
+input.oninput = event => {
+	const file = input.files[0];
+	fetch("http://localhost:3000", {
+		method: "POST",
+		body: file,
+		mode: "cors",
+	})
+}
+</script>
+</body>
+</html>

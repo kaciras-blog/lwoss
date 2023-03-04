@@ -9,6 +9,9 @@ use std::io::Write;
 use std::path::{PathBuf};
 use axum::response::Response;
 use tokio_util::io::{ReaderStream, StreamReader};
+use xxhash_rust::xxh3::Xxh3;
+use base64::{Engine as _, engine::general_purpose};
+use futures::StreamExt;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 #[tokio::main]
@@ -17,6 +20,7 @@ async fn main() {
 
 	// build our application with a route
 	let app = Router::new()
+		.route("/", post(upload))
 		.route("/s/:hash", get(create_user))
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
@@ -42,4 +46,23 @@ async fn create_user(Path(hash): Path<String>) -> Response {
 	let file = ReaderStream::new(file);
 	let body = StreamBody::new(file);
 	return (StatusCode::OK, body).into_response();
+}
+
+async fn upload(mut body: BodyStream) -> Response {
+	let mut hasher = Xxh3::new();
+
+	while let Some(chunk) = body.next().await {
+		match chunk {
+			Ok(data) => {
+				hasher.update(data.as_ref());
+			}
+			Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+		};
+	};
+
+	let hash = hasher.digest128().to_be_bytes()[..20];
+	let hash = general_purpose::URL_SAFE_NO_PAD.encode(hash);
+	println!("hash is {}", hash);
+
+	return (StatusCode::OK).into_response();
 }
