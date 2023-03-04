@@ -1,23 +1,59 @@
 use std::borrow::BorrowMut;
 use std::env;
 use std::error::Error;
-use axum::{body::StreamBody, routing::{get, post}, http::StatusCode, response::IntoResponse, Json, Router, http};
-use std::net::SocketAddr;
-use axum::extract::{BodyStream, Path};
-use std::fs::{File};
+use std::fs::{self, File};
 use std::io::Write;
-use std::path::{PathBuf};
+use std::net::SocketAddr;
+use std::path::PathBuf;
+
+use axum::{body::StreamBody, http, http::StatusCode, Json, response::IntoResponse, Router, routing::{get, post}};
+use axum::extract::{BodyStream, Path};
 use axum::response::Response;
-use tokio_util::io::{ReaderStream, StreamReader};
-use xxhash_rust::xxh3::Xxh3;
 use base64::{Engine as _, engine::general_purpose};
+use clap::{Parser, ValueHint};
 use futures::StreamExt;
 use tempfile::NamedTempFile;
+use tokio_util::io::{ReaderStream, StreamReader};
+use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use xxhash_rust::xxh3::Xxh3;
+
+use serde::Deserialize;
+
+#[derive(Parser, Debug)]
+struct Args {
+	/// Specific config file path.
+	#[arg(long, value_hint = ValueHint::FilePath)]
+	config: Option<PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct AppConfig {
+	host: Option<String>,
+	port: Option<u16>,
+	data_dir: Option<PathBuf>,
+}
+
+fn load_config(args: Args) -> AppConfig {
+	let config = match args.config {
+		Some(file) => fs::read_to_string(file),
+		None => {
+			let mut file = env::current_dir().unwrap();
+			file.push("lwoss.toml");
+			if !file.is_file() {
+				Ok(String::with_capacity(0))
+			} else {
+				fs::read_to_string(file)
+			}
+		}
+	};
+	let config = config.unwrap();
+	return toml::from_str(config.as_str()).unwrap();
+}
 
 #[tokio::main]
 async fn main() {
-
+	let config = load_config(Args::parse());
 
 	// build our application with a route
 	let app = Router::new()
