@@ -12,6 +12,7 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use xxhash_rust::xxh3::Xxh3;
 use base64::{Engine as _, engine::general_purpose};
 use futures::StreamExt;
+use tempfile::NamedTempFile;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 #[tokio::main]
@@ -49,20 +50,26 @@ async fn create_user(Path(hash): Path<String>) -> Response {
 }
 
 async fn upload(mut body: BodyStream) -> Response {
+	// Create temp file in the same drive as data folder to avoid copy on rename.
+	let cwd = env::current_dir().unwrap();
+	let mut tmpfile = NamedTempFile::new_in(cwd).unwrap();
+
 	let mut hasher = Xxh3::new();
 
 	while let Some(chunk) = body.next().await {
 		match chunk {
 			Ok(data) => {
 				hasher.update(data.as_ref());
+				tmpfile.write(data.as_ref()).unwrap();
 			}
 			Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
 		};
 	};
 
-	let hash = hasher.digest128().to_be_bytes()[..20];
-	let hash = general_purpose::URL_SAFE_NO_PAD.encode(hash);
+	let hash = hasher.digest128().to_be_bytes();
+	let hash = general_purpose::URL_SAFE_NO_PAD.encode(&hash[..20]);
 	println!("hash is {}", hash);
 
+	std::fs::rename(tmpfile, hash).unwrap();
 	return (StatusCode::OK).into_response();
 }
