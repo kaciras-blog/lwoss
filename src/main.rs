@@ -9,6 +9,7 @@ use std::io::Write;
 use std::path::{PathBuf};
 use axum::response::Response;
 use tokio_util::io::{ReaderStream, StreamReader};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +17,11 @@ async fn main() {
 
 	// build our application with a route
 	let app = Router::new()
-		.route("/s/:hash", get(create_user));
+		.route("/s/:hash", get(create_user))
+		.layer(CorsLayer::new()
+			.allow_origin(AllowOrigin::mirror_request())
+			.allow_headers(Any)
+			.allow_methods(Any));
 
 	// `axum::Server` is a re-export of `hyper::Server`
 	let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
