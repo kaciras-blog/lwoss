@@ -1,3 +1,5 @@
+mod api;
+
 use std::borrow::BorrowMut;
 use std::env;
 use std::error::Error;
@@ -19,6 +21,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use xxhash_rust::xxh3::Xxh3;
 
 use serde::Deserialize;
+use crate::api::{DataDirs,upload,download};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -54,58 +57,33 @@ fn load_config(args: Args) -> AppConfig {
 #[tokio::main]
 async fn main() {
 	let config = load_config(Args::parse());
+	let wd = config.data_dir.unwrap_or("data".into());
+
+	let api_ctx = DataDirs {
+		data_dir: wd.join("files"),
+		buf_dir: wd.join("buffer"),
+	};
+
+	fs::create_dir_all(&api_ctx.data_dir).unwrap();
+	fs::create_dir_all(&api_ctx.buf_dir).unwrap();
 
 	// build our application with a route
 	let app = Router::new()
 		.route("/", post(upload))
-		.route("/s/:hash", get(create_user))
+		.route("/s/:hash", get(download))
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
 			.allow_headers(Any)
 			.allow_methods(Any));
 
-	// `axum::Server` is a re-export of `hyper::Server`
+	let app = app.with_state(api_ctx);
 	let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+	println!("LWEOS listening on {}", addr);
+
+	// `axum::Server` is a re-export of `hyper::Server`
+
 	axum::Server::bind(&addr)
 		.serve(app.into_make_service())
 		.await
 		.unwrap();
-
-	println!("LWEOS listening on {}", addr);
-}
-
-async fn create_user(Path(hash): Path<String>) -> Response {
-	let file = match tokio::fs::File::open("Cargo.toml").await {
-		Ok(file) => file,
-		Err(err) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-	};
-
-	let file = ReaderStream::new(file);
-	let body = StreamBody::new(file);
-	return (StatusCode::OK, body).into_response();
-}
-
-async fn upload(mut body: BodyStream) -> Response {
-	// Create temp file in the same drive as data folder to avoid copy on rename.
-	let cwd = env::current_dir().unwrap();
-	let mut tmpfile = NamedTempFile::new_in(cwd).unwrap();
-
-	let mut hasher = Xxh3::new();
-
-	while let Some(chunk) = body.next().await {
-		match chunk {
-			Ok(data) => {
-				hasher.update(data.as_ref());
-				tmpfile.write(data.as_ref()).unwrap();
-			}
-			Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-		};
-	};
-
-	let hash = hasher.digest128().to_be_bytes();
-	let hash = general_purpose::URL_SAFE_NO_PAD.encode(&hash[..20]);
-	println!("hash is {}", hash);
-
-	std::fs::rename(tmpfile, hash).unwrap();
-	return (StatusCode::OK).into_response();
 }
