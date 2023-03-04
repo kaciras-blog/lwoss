@@ -3,7 +3,7 @@ use std::env;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::Write;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use axum::{body::StreamBody, http, http::StatusCode, Json, middleware, response::IntoResponse, Router, routing::{get, post}};
@@ -91,16 +91,20 @@ async fn main() {
 			.allow_methods(Any))
 		.with_state(api_ctx);
 
-	let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-	println!("LWEOS listening on {}", addr);
+	let addr = SocketAddr::from((
+		config.host
+			.map(|v| v.parse::<IpAddr>().unwrap())
+			.unwrap_or(Ipv4Addr::LOCALHOST.into()),
+
+		config.port.unwrap_or(3000)
+	));
+	println!("LW-OSS is listening on {}", addr);
 
 	// `axum::Server` is a re-export of `hyper::Server`
-
 	axum::Server::bind(&addr)
 		.serve(app.into_make_service())
 		.with_graceful_shutdown(shutdown_signal())
-		.await
-		.unwrap();
+		.await.unwrap();
 }
 
 async fn auth<B>(
@@ -114,7 +118,7 @@ async fn auth<B>(
 			return next.run(request).await;
 		}
 	}
-	return (StatusCode::FORBIDDEN).into_response();
+	return StatusCode::FORBIDDEN.into_response();
 }
 
 // https://github.com/tokio-rs/axum/blob/main/examples/graceful-shutdown

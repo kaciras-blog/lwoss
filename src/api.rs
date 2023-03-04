@@ -16,6 +16,7 @@ use clap::{Parser, ValueHint};
 use cookie::Expiration;
 use cookie::time::{Duration, OffsetDateTime};
 use futures::StreamExt;
+use serde::Serialize;
 use tempfile::NamedTempFile;
 use tokio_util::io::{ReaderStream, StreamReader};
 use toml;
@@ -29,6 +30,7 @@ pub struct DataDirs {
 	pub password: Option<String>,
 }
 
+#[derive(Serialize)]
 struct UploadVO {
 	hash: String,
 }
@@ -74,7 +76,7 @@ pub async fn upload(state: State<DataDirs>, mut body: BodyStream) -> Response {
 		fs::rename(tmpfile, path).unwrap();
 	}
 
-	return (StatusCode::OK, Json(UploadVO { hash })).into_response();
+	return Json(UploadVO { hash }).into_response();
 }
 
 pub async fn download(state: State<DataDirs>, Path(hash): Path<String>) -> Response {
@@ -82,9 +84,8 @@ pub async fn download(state: State<DataDirs>, Path(hash): Path<String>) -> Respo
 
 	let file = match tokio::fs::File::open(path).await {
 		Ok(file) => file,
-		Err(err) => return StatusCode::NOT_FOUND.into_response(),
+		Err(_) => return StatusCode::NOT_FOUND.into_response(),
 	};
 
-	let file = ReaderStream::new(file);
-	return (StatusCode::OK, StreamBody::new(file)).into_response();
+	return StreamBody::new(ReaderStream::new(file)).into_response();
 }
