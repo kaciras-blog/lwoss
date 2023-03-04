@@ -1,5 +1,5 @@
 [package]
-name = "lw-oss"
+name = "lwoss"
 description = "Lightweight object storage service."
 authors = ["Kaciras <kaciras@outlook.com>"]
 license = "MIT"

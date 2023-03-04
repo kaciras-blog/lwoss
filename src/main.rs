@@ -47,7 +47,7 @@ fn load_config(args: Args) -> AppConfig {
 		Some(file) => fs::read_to_string(file),
 		None => {
 			let mut file = env::current_dir().unwrap();
-			file.push("lw-oss.toml");
+			file.push("lwoss.toml");
 			if !file.is_file() {
 				Ok(String::with_capacity(0))
 			} else {

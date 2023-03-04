@@ -522,7 +522,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lw-oss"
+name = "lwoss"
 version = "0.1.0"
 dependencies = [
  "axum",
