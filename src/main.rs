@@ -1,5 +1,3 @@
-mod api;
-
 use std::borrow::BorrowMut;
 use std::env;
 use std::error::Error;
@@ -8,20 +6,26 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use axum::{body::StreamBody, http, http::StatusCode, Json, response::IntoResponse, Router, routing::{get, post}};
-use axum::extract::{BodyStream, Path};
+use axum::{body::StreamBody, http, http::StatusCode, Json, middleware, response::IntoResponse, Router, routing::{get, post}};
+use axum::extract::{BodyStream, Path, State};
+use axum::http::Request;
+use axum::middleware::Next;
 use axum::response::Response;
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use base64::{Engine as _, engine::general_purpose};
 use clap::{Parser, ValueHint};
 use futures::StreamExt;
+use serde::Deserialize;
 use tempfile::NamedTempFile;
+use tokio::signal;
 use tokio_util::io::{ReaderStream, StreamReader};
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use xxhash_rust::xxh3::Xxh3;
 
-use serde::Deserialize;
-use crate::api::{DataDirs,upload,download};
+use crate::api::{DataDirs, download, login, upload};
+
+mod api;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -35,6 +39,7 @@ struct AppConfig {
 	host: Option<String>,
 	port: Option<u16>,
 	data_dir: Option<PathBuf>,
+	password: Option<String>,
 }
 
 fn load_config(args: Args) -> AppConfig {
@@ -42,7 +47,7 @@ fn load_config(args: Args) -> AppConfig {
 		Some(file) => fs::read_to_string(file),
 		None => {
 			let mut file = env::current_dir().unwrap();
-			file.push("lwoss.toml");
+			file.push("lw-oss.toml");
 			if !file.is_file() {
 				Ok(String::with_capacity(0))
 			} else {
@@ -62,21 +67,30 @@ async fn main() {
 	let api_ctx = DataDirs {
 		data_dir: wd.join("files"),
 		buf_dir: wd.join("buffer"),
+		password: config.password.clone(),
 	};
 
 	fs::create_dir_all(&api_ctx.data_dir).unwrap();
 	fs::create_dir_all(&api_ctx.buf_dir).unwrap();
 
-	// build our application with a route
-	let app = Router::new()
-		.route("/", post(upload))
+	let public_routes = Router::new()
 		.route("/s/:hash", get(download))
+		.route("/login", post(login));
+
+	let mut admin_routes = Router::new()
+		.route("/", post(upload));
+
+	if let Some(password) = config.password {
+		admin_routes = admin_routes.route_layer(middleware::from_fn_with_state(password, auth));
+	}
+
+	let app = public_routes.merge(admin_routes)
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
 			.allow_headers(Any)
-			.allow_methods(Any));
+			.allow_methods(Any))
+		.with_state(api_ctx);
 
-	let app = app.with_state(api_ctx);
 	let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 	println!("LWEOS listening on {}", addr);
 
@@ -87,6 +101,20 @@ async fn main() {
 		.with_graceful_shutdown(shutdown_signal())
 		.await
 		.unwrap();
+}
+
+async fn auth<B>(
+	State(password): State<String>,
+	jar: CookieJar,
+	request: Request<B>,
+	next: Next<B>
+) -> Response {
+	if let Some(cookie) = jar.get("password") {
+		if cookie.value() == password {
+			return next.run(request).await;
+		}
+	}
+	return (StatusCode::FORBIDDEN).into_response();
 }
 
 // https://github.com/tokio-rs/axum/blob/main/examples/graceful-shutdown
@@ -106,7 +134,7 @@ async fn shutdown_signal() {
 	};
 
 	#[cfg(not(unix))]
-	let terminate = std::future::pending::<()>();
+		let terminate = std::future::pending::<()>();
 
 	tokio::select! {
         _ = ctrl_c => {},

@@ -9,8 +9,12 @@ use std::path::PathBuf;
 use axum::{body::StreamBody, http, http::StatusCode, Json, response::IntoResponse, Router, routing::{get, post}};
 use axum::extract::{BodyStream, Path, State};
 use axum::response::Response;
+use axum_extra::extract::cookie::Cookie;
+use axum_extra::extract::CookieJar;
 use base64::{Engine as _, engine::general_purpose};
 use clap::{Parser, ValueHint};
+use cookie::Expiration;
+use cookie::time::{Duration, OffsetDateTime};
 use futures::StreamExt;
 use tempfile::NamedTempFile;
 use tokio_util::io::{ReaderStream, StreamReader};
@@ -22,6 +26,28 @@ use xxhash_rust::xxh3::Xxh3;
 pub struct DataDirs {
 	pub data_dir: PathBuf,
 	pub buf_dir: PathBuf,
+	pub password: Option<String>,
+}
+
+struct UploadVO {
+	hash: String,
+}
+
+pub async fn login(State(options): State<DataDirs>, jar: CookieJar, body: String) -> Response {
+	let password = match options.password {
+		Some(value) => value,
+		None => return StatusCode::NO_CONTENT.into_response(),
+	};
+
+	if body != password {
+		return StatusCode::BAD_REQUEST.into_response();
+	}
+
+	let mut cookie = Cookie::new("password", password);
+	cookie.set_http_only(true);
+	cookie.set_expires(OffsetDateTime::now_utc() + Duration::weeks(52));
+
+	return (StatusCode::NO_CONTENT, jar.add(cookie)).into_response();
 }
 
 pub async fn upload(state: State<DataDirs>, mut body: BodyStream) -> Response {
@@ -32,10 +58,10 @@ pub async fn upload(state: State<DataDirs>, mut body: BodyStream) -> Response {
 	while let Some(chunk) = body.next().await {
 		match chunk {
 			Ok(data) => {
-				hasher.update(data.as_ref());
-				tmpfile.write(data.as_ref()).unwrap();
+				tmpfile.write(&data).unwrap();
+				hasher.update(&data);
 			}
-			Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+			Err(_) => return StatusCode::BAD_REQUEST.into_response(),
 		};
 	};
 
@@ -48,7 +74,7 @@ pub async fn upload(state: State<DataDirs>, mut body: BodyStream) -> Response {
 		fs::rename(tmpfile, path).unwrap();
 	}
 
-	return (StatusCode::OK, hash).into_response();
+	return (StatusCode::OK, Json(UploadVO { hash })).into_response();
 }
 
 pub async fn download(state: State<DataDirs>, Path(hash): Path<String>) -> Response {
@@ -56,10 +82,9 @@ pub async fn download(state: State<DataDirs>, Path(hash): Path<String>) -> Respo
 
 	let file = match tokio::fs::File::open(path).await {
 		Ok(file) => file,
-		Err(err) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+		Err(err) => return StatusCode::NOT_FOUND.into_response(),
 	};
 
 	let file = ReaderStream::new(file);
-	let body = StreamBody::new(file);
-	return (StatusCode::OK, body).into_response();
+	return (StatusCode::OK, StreamBody::new(file)).into_response();
 }
