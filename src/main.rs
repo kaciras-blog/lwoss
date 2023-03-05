@@ -1,28 +1,24 @@
 use std::borrow::BorrowMut;
 use std::env;
 use std::error::Error;
-use std::fs::{self, File};
+use std::fs::{self};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
-use axum::{body::StreamBody, http, http::StatusCode, Json, middleware, response::IntoResponse, Router, routing::{get, post}};
-use axum::extract::{BodyStream, Path, State};
-use axum::http::Request;
-use axum::middleware::Next;
-use axum::response::Response;
-use axum_extra::extract::cookie::{Cookie, CookieJar};
-use base64::{Engine as _, engine::general_purpose};
+use axum::{Router, Server};
+use axum::extract::State;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum_extra::extract::cookie::CookieJar;
 use clap::{Parser, ValueHint};
 use futures::StreamExt;
 use serde::Deserialize;
-use tempfile::NamedTempFile;
 use tokio::signal;
-use tokio_util::io::{ReaderStream, StreamReader};
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
-use xxhash_rust::xxh3::Xxh3;
-use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::api::{DataDirs, download, login, upload};
 
@@ -93,22 +89,21 @@ async fn main() {
 			.allow_headers(Any)
 			.allow_methods(Any));
 
-	if let Some(size) = config.body_limit {
-		app = app.layer(RequestBodyLimitLayer::new(size))
-	}
+	// https://github.com/tokio-rs/axum/issues/1110
+	// if let Some(size) = config.body_limit {
+	// 	app = app.layer(RequestBodyLimitLayer::new(size));
+	// }
 
 	let addr = SocketAddr::from((
 		config.host
 			.map(|v| v.parse::<IpAddr>().unwrap())
 			.unwrap_or(Ipv4Addr::LOCALHOST.into()),
-		config.port.unwrap_or(3000)
+		config.port.unwrap_or(3000),
 	));
 	println!("LW-OSS is listening on {}", addr);
 
 	// `axum::Server` is a re-export of `hyper::Server`
-	axum::Server::bind(&addr)
-		.serve(app.into_make_service())
-		.await.unwrap();
+	Server::bind(&addr).serve(app.into_make_service()).await.unwrap();
 }
 
 async fn auth<B>(

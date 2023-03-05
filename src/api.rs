@@ -1,30 +1,19 @@
-use std::borrow::BorrowMut;
-use std::env;
-use std::error::Error;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Write;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use  axum::async_trait;
-use axum::{body::StreamBody, http, http::StatusCode, Json, response::IntoResponse, Router, routing::{get, post}};
-use axum::body::Bytes;
-use axum::extract::{BodyStream, FromRequest, FromRequestParts, Path, State};
-use axum::http::Request;
-use axum::http::request::Parts;
+use axum::extract::{BodyStream, Path, State};
 use axum::response::Response;
+use axum::{body::StreamBody, http::StatusCode, response::IntoResponse, routing::post, Json};
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
-use base64::{Engine as _, engine::general_purpose};
-use clap::{Parser, ValueHint};
-use cookie::Expiration;
+use base64::{engine::general_purpose, Engine as _};
 use cookie::time::{Duration, OffsetDateTime};
 use futures::StreamExt;
 use serde::Serialize;
 use tempfile::{NamedTempFile, PersistError};
-use tokio_util::io::{ReaderStream, StreamReader};
+use tokio_util::io::ReaderStream;
 use toml;
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use xxhash_rust::xxh3::Xxh3;
 
 #[derive(Clone)]
@@ -87,7 +76,6 @@ pub struct FileBuf {
 // 1) 多传让请求体的大小限制混乱。
 // 2) 多传的实现更复杂，而且能被多次单传替代，而且没看到明显收益。
 impl FileBuf {
-
 	// Create temp file in the same drive as data folder to avoid copy on rename.
 	pub async fn receive(state: &DataDirs, mut body: BodyStream) -> Result<FileBuf, axum::Error> {
 		let mut file = NamedTempFile::new_in(&state.buf_dir).unwrap();
@@ -97,7 +85,7 @@ impl FileBuf {
 			let data = chunk?;
 			hasher.update(&data);
 			file.write(&data).unwrap();
-		};
+		}
 
 		let hash = hasher.digest128().to_be_bytes();
 		let hash = general_purpose::URL_SAFE_NO_PAD.encode(&hash[..15]);
@@ -106,6 +94,6 @@ impl FileBuf {
 	}
 
 	pub fn save(self) -> Result<File, PersistError> {
-		return self.file.persist(self.target.join(self.hash))
+		return self.file.persist(self.target.join(self.hash));
 	}
 }
