@@ -22,6 +22,7 @@ use tokio_util::io::{ReaderStream, StreamReader};
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use xxhash_rust::xxh3::Xxh3;
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::api::{DataDirs, download, login, upload};
 
@@ -40,6 +41,7 @@ struct AppConfig {
 	port: Option<u16>,
 	data_dir: Option<PathBuf>,
 	password: Option<String>,
+	body_limit: Option<usize>,
 }
 
 fn load_config(args: Args) -> AppConfig {
@@ -84,18 +86,21 @@ async fn main() {
 		admin_routes = admin_routes.route_layer(middleware::from_fn_with_state(password, auth));
 	}
 
-	let app = public_routes.merge(admin_routes)
+	let mut app = public_routes.merge(admin_routes)
+		.with_state(api_ctx)
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
 			.allow_headers(Any)
-			.allow_methods(Any))
-		.with_state(api_ctx);
+			.allow_methods(Any));
+
+	if let Some(size) = config.body_limit {
+		app = app.layer(RequestBodyLimitLayer::new(size))
+	}
 
 	let addr = SocketAddr::from((
 		config.host
 			.map(|v| v.parse::<IpAddr>().unwrap())
 			.unwrap_or(Ipv4Addr::LOCALHOST.into()),
-
 		config.port.unwrap_or(3000)
 	));
 	println!("LW-OSS is listening on {}", addr);
@@ -103,7 +108,6 @@ async fn main() {
 	// `axum::Server` is a re-export of `hyper::Server`
 	axum::Server::bind(&addr)
 		.serve(app.into_make_service())
-		.with_graceful_shutdown(shutdown_signal())
 		.await.unwrap();
 }
 
@@ -111,7 +115,7 @@ async fn auth<B>(
 	State(password): State<String>,
 	jar: CookieJar,
 	request: Request<B>,
-	next: Next<B>
+	next: Next<B>,
 ) -> Response {
 	if let Some(cookie) = jar.get("password") {
 		if cookie.value() == password {
