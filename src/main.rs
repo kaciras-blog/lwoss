@@ -14,15 +14,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 use clap::{Parser, ValueHint};
-use futures::StreamExt;
 use serde::Deserialize;
 use tokio::signal;
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-use crate::api::{DataDirs, download, login, upload};
+use crate::api::{download, login, upload};
+use crate::context::OSSContext;
 
 mod api;
+mod context;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -62,14 +63,14 @@ async fn main() {
 	let config = load_config(Args::parse());
 	let wd = config.data_dir.unwrap_or("data".into());
 
-	let api_ctx = DataDirs {
+	let ctx = OSSContext {
 		data_dir: wd.join("files"),
 		buf_dir: wd.join("buffer"),
 		password: config.password.clone(),
 	};
 
-	fs::create_dir_all(&api_ctx.data_dir).unwrap();
-	fs::create_dir_all(&api_ctx.buf_dir).unwrap();
+	fs::create_dir_all(&ctx.data_dir).unwrap();
+	fs::create_dir_all(&ctx.buf_dir).unwrap();
 
 	let public_routes = Router::new()
 		.route("/s/:hash", get(download))
@@ -82,8 +83,8 @@ async fn main() {
 		admin_routes = admin_routes.route_layer(middleware::from_fn_with_state(password, auth));
 	}
 
-	let mut app = public_routes.merge(admin_routes)
-		.with_state(api_ctx)
+	let app = public_routes.merge(admin_routes)
+		.with_state(ctx)
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
 			.allow_headers(Any)
