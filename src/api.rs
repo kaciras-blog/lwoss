@@ -1,4 +1,4 @@
-use axum::{body::StreamBody, http::StatusCode, Json, response::IntoResponse, routing::post};
+use axum::{body::StreamBody, http::StatusCode, Json, response::IntoResponse};
 use axum::extract::{BodyStream, Path, State};
 use axum::response::Response;
 use axum_extra::extract::cookie::Cookie;
@@ -30,7 +30,7 @@ pub async fn login(State(ctx): State<OSSContext>, jar: CookieJar, body: String) 
 	return (StatusCode::NO_CONTENT, jar.add(cookie)).into_response();
 }
 
-pub async fn upload(ctx: State<OSSContext>, mut body: BodyStream) -> Response {
+pub async fn upload(ctx: State<OSSContext>, body: BodyStream) -> Response {
 	let buf = ctx.receive_file(body).await.unwrap();
 	let hash = buf.hash.clone();
 	println!("hash is {}", hash);

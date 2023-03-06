@@ -2,7 +2,6 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-use axum::routing::post;
 use axum::extract::BodyStream;
 use base64::{Engine as _, engine::general_purpose};
 use futures::StreamExt;
@@ -18,7 +17,7 @@ pub struct OSSContext {
 }
 
 impl OSSContext {
-	pub async fn receive_file(&self, mut body: BodyStream) -> Result<FileBuf, axum::Error> {
+	pub async fn receive_file(&self, body: BodyStream) -> Result<FileBuf, axum::Error> {
 		return FileBuf::receive(self, body).await;
 	}
 }
