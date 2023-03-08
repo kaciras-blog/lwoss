@@ -15,6 +15,7 @@ use clap::{Parser, ValueHint};
 use log::{self, LevelFilter, SetLoggerError};
 use serde::Deserialize;
 use simplelog::{ColorChoice, Config, ConfigBuilder, TerminalMode, WriteLogger, TermLogger};
+use tokio::runtime::Builder;
 use tokio::signal;
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -37,8 +38,11 @@ struct AppConfig {
 	log_level: Option<String>,
 	log_file: Option<String>,
 
-	host: Option<String>,
-	port: Option<u16>,
+	/// 0=auto, 1=single thread, >1 specific thread count.
+	/// default is 1.
+	threads: Option<usize>,
+
+	bind: Option<SocketAddr>,
 	body_limit: Option<usize>,
 
 	password: Option<String>,
@@ -93,12 +97,7 @@ fn setup_logger(options: &AppConfig) -> Result<(), Box<dyn Error>> {
 	Ok(())
 }
 
-#[tokio::main]
-async fn main() {
-	let config = load_config(Args::parse());
-
-	setup_logger(&config).expect("Unable to create logger");
-
+async fn run(config: AppConfig) {
 	let wd = config.data_dir.unwrap_or("data".into());
 	let ctx = OSSContext {
 		data_dir: wd.join("files"),
@@ -132,16 +131,27 @@ async fn main() {
 	// 	app = app.layer(RequestBodyLimitLayer::new(size));
 	// }
 
-	let addr = SocketAddr::from((
-		config.host
-			.map(|v| v.parse::<IpAddr>().unwrap())
-			.unwrap_or(Ipv4Addr::LOCALHOST.into()),
-		config.port.unwrap_or(3000),
-	));
+	let addr = config.bind.unwrap_or(SocketAddr::from(([127, 0, 0, 1], 3000)));
 	log::info!("LW-OSS is listening on {}", addr);
-
-	// `axum::Server` is a re-export of `hyper::Server`
 	Server::bind(&addr).serve(app.into_make_service()).await.unwrap();
+}
+
+fn main() {
+	let config = load_config(Args::parse());
+	setup_logger(&config).expect("Unable to create logger");
+
+	let threads = config.threads.unwrap_or(1);
+	let mut tokio = if threads == 1 {
+		Builder::new_current_thread()
+	} else {
+		Builder::new_multi_thread()
+	};
+
+	if threads > 1 {
+		tokio.worker_threads(threads);
+	}
+
+	tokio.enable_all().build().unwrap().block_on(run(config));
 }
 
 async fn auth<B>(
