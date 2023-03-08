@@ -1,4 +1,6 @@
+/.idea
 /target
 /data
 
+*.log
 /lwoss.toml

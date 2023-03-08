@@ -1,5 +1,6 @@
 use std::env;
-use std::fs::{self};
+use std::error::Error;
+use std::fs::{self, File, OpenOptions};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -11,7 +12,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::CookieJar;
 use clap::{Parser, ValueHint};
+use log::{self, LevelFilter, SetLoggerError};
 use serde::Deserialize;
+use simplelog::{ColorChoice, Config, ConfigBuilder, TerminalMode, WriteLogger, TermLogger};
 use tokio::signal;
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -31,11 +34,15 @@ struct Args {
 
 #[derive(Deserialize)]
 struct AppConfig {
+	log_level: Option<String>,
+	log_file: Option<String>,
+
 	host: Option<String>,
 	port: Option<u16>,
-	data_dir: Option<PathBuf>,
-	password: Option<String>,
 	body_limit: Option<usize>,
+
+	password: Option<String>,
+	data_dir: Option<PathBuf>,
 }
 
 fn load_config(args: Args) -> AppConfig {
@@ -44,10 +51,10 @@ fn load_config(args: Args) -> AppConfig {
 		None => {
 			let mut file = env::current_dir().unwrap();
 			file.push("lwoss.toml");
-			if !file.is_file() {
-				Ok(String::with_capacity(0))
-			} else {
+			if file.is_file() {
 				fs::read_to_string(file)
+			} else {
+				Ok(String::with_capacity(0))
 			}
 		}
 	};
@@ -55,11 +62,44 @@ fn load_config(args: Args) -> AppConfig {
 	return toml::from_str(config.as_str()).unwrap();
 }
 
+fn setup_logger(options: &AppConfig) -> Result<(), Box<dyn Error>> {
+	let cfg = ConfigBuilder::new()
+		.add_filter_allow_str("lwoss")
+		.build();
+
+	let lv = match &options.log_level {
+		None => LevelFilter::Info,
+		Some(name) => match name.as_str() {
+			"off" => LevelFilter::Off,
+			"error" => LevelFilter::Error,
+			"warn" => LevelFilter::Warn,
+			"info" => LevelFilter::Info,
+			"debug" => LevelFilter::Debug,
+			"trace" => LevelFilter::Trace,
+			_ => return Err(Box::new(std::fmt::Error {})),
+		}
+	};
+
+	if let Some(file) = &options.log_file {
+		let file = OpenOptions::new()
+			.create(true)
+			.append(true)
+			.open(file)?;
+		WriteLogger::init(lv, cfg, file)?;
+	} else {
+		TermLogger::init(lv, cfg, TerminalMode::Mixed, ColorChoice::Auto)?;
+	}
+
+	Ok(())
+}
+
 #[tokio::main]
 async fn main() {
 	let config = load_config(Args::parse());
-	let wd = config.data_dir.unwrap_or("data".into());
 
+	setup_logger(&config).expect("Unable to create logger");
+
+	let wd = config.data_dir.unwrap_or("data".into());
 	let ctx = OSSContext {
 		data_dir: wd.join("files"),
 		buf_dir: wd.join("buffer"),
@@ -98,7 +138,7 @@ async fn main() {
 			.unwrap_or(Ipv4Addr::LOCALHOST.into()),
 		config.port.unwrap_or(3000),
 	));
-	println!("LW-OSS is listening on {}", addr);
+	log::info!("LW-OSS is listening on {}", addr);
 
 	// `axum::Server` is a re-export of `hyper::Server`
 	Server::bind(&addr).serve(app.into_make_service()).await.unwrap();
