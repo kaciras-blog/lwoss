@@ -5,6 +5,9 @@ on:
     branches:
       - master
 
+# The built-in images already contain the appropriate versions of Node and Python.
+# For more details, see https://github.com/actions/runner-images
+
 jobs:
   build:
     strategy:
