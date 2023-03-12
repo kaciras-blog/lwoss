@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - run: python --version
+
       # Build the server
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -44,5 +46,5 @@ jobs:
         if: steps.cache-web.outputs.cache-hit != 'true'
         working-directory: web
 
-      # Deploy
+      # Pack and deploy
       - run: node move-files.mjs
