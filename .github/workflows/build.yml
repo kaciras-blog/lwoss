@@ -30,7 +30,7 @@ jobs:
         id: cache-web
         with:
           path: web/build
-          key: pages-${{ env.GITHUB_SHA }}
+          key: pages-${{ github.sha }}
           enableCrossOsArchive: true
 
       - uses: pnpm/action-setup@v2
