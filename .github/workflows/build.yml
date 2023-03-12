@@ -16,21 +16,29 @@ jobs:
     runs-on:  ${{ matrix.os }}
 
     steps:
+      - uses: actions/checkout@v3
+
       # Build the server
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
-      - uses: actions/checkout@v3
-
       - run: cargo build --release
 
       # Build the web app
+      - uses: actions/cache@v3
+        id: cache-web
+        with:
+          path: web/build
+          key: pages-are-cross-platform
+
       - uses: pnpm/action-setup@v2
+        if: steps.cache-web.outputs.cache-hit != 'true'
         with:
           version: latest
           run_install: |
             - cwd: web
 
       - run: pnpm run build
+        if: steps.cache-web.outputs.cache-hit != 'true'
         working-directory: web
