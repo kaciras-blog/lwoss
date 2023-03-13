@@ -1,17 +1,25 @@
-use axum::{body::StreamBody, http::StatusCode, Json, response::IntoResponse};
+use std::ops::Deref;
+use std::sync::Arc;
+
+use axum::{body::StreamBody, http::StatusCode, Json, response::IntoResponse, Router};
+use axum::body::Body;
 use axum::extract::{BodyStream, Path, State};
+use axum::http::{HeaderMap, Request};
+use axum::http::request::Parts;
 use axum::response::Response;
+use axum::routing::{get, post};
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use cookie::time::{Duration, OffsetDateTime};
+use log;
 use serde::Serialize;
+use tokio::io::AsyncSeekExt;
 use tokio_util::io::ReaderStream;
-use crate::context::{OSSContext};
+use tower_http::limit::ResponseBody;
 
-#[derive(Serialize)]
-struct UploadVO {
-	hash: String,
-}
+use crate::bucket::UploadVO;
+use crate::context::OSSContext;
+use crate::range::send_range;
 
 pub async fn login(State(ctx): State<OSSContext>, jar: CookieJar, body: String) -> Response {
 	let password = match ctx.password {
@@ -39,13 +47,11 @@ pub async fn upload(ctx: State<OSSContext>, body: BodyStream) -> Response {
 	return Json(UploadVO { hash }).into_response();
 }
 
-pub async fn download(ctx: State<OSSContext>, Path(hash): Path<String>) -> Response {
-	let path = &ctx.data_dir.join(hash);
+pub async fn download(ctx: State<OSSContext>, Path(hash): Path<String>, headers: HeaderMap) -> Response {
+	let path = ctx.data_dir.join(hash);
+	send_range(headers, path, String::from("image/png")).await
+}
 
-	let file = match tokio::fs::File::open(path).await {
-		Ok(file) => file,
-		Err(_) => return StatusCode::NOT_FOUND.into_response(),
-	};
-
-	return StreamBody::new(ReaderStream::new(file)).into_response();
+pub fn manual_bucket() -> Router<OSSContext> {
+	return Router::new().route("/", post(upload)).route("/:hash", get(download));
 }
