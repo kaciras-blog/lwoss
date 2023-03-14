@@ -5,8 +5,14 @@ use std::path::PathBuf;
 use axum::extract::BodyStream;
 use base64::{Engine as _, engine::general_purpose};
 use futures::StreamExt;
+use serde::Serialize;
 use tempfile::{NamedTempFile, PersistError};
 use xxhash_rust::xxh3::Xxh3;
+
+#[derive(Serialize)]
+pub struct UploadVO {
+	pub hash: String,
+}
 
 /// 业务逻辑的状态全，刚玩 Rust 所以弄得简单点，都保存在这一个对象里。
 #[derive(Clone)]

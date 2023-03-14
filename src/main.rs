@@ -1,7 +1,8 @@
 use std::env;
 use std::error::Error;
-use std::fs::{self, File, OpenOptions};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::{Router, Server};
@@ -9,22 +10,25 @@ use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::post;
 use axum_extra::extract::cookie::CookieJar;
 use clap::{Parser, ValueHint};
-use log::{self, LevelFilter, SetLoggerError};
+use log::{self, LevelFilter};
 use serde::Deserialize;
-use simplelog::{ColorChoice, Config, ConfigBuilder, TerminalMode, WriteLogger, TermLogger};
+use simplelog::{ColorChoice, ConfigBuilder, TerminalMode, TermLogger, WriteLogger};
 use tokio::runtime::Builder;
 use tokio::signal;
 use toml;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-use crate::api::{download, login, upload};
+use crate::api::login;
 use crate::context::OSSContext;
+use crate::manual::manual_bucket;
 
-mod api;
 mod context;
+mod range;
+mod api;
+mod manual;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -71,6 +75,7 @@ fn setup_logger(options: &AppConfig) -> Result<(), Box<dyn Error>> {
 		.add_filter_allow_str("lwoss")
 		.build();
 
+	// 另一种自定义第三方代码序列化的做法：https://serde.rs/remote-derive.html
 	let lv = match &options.log_level {
 		None => LevelFilter::Info,
 		Some(name) => match name.as_str() {
@@ -99,6 +104,7 @@ fn setup_logger(options: &AppConfig) -> Result<(), Box<dyn Error>> {
 
 async fn run(config: AppConfig) {
 	let wd = config.data_dir.unwrap_or("data".into());
+
 	let ctx = OSSContext {
 		data_dir: wd.join("files"),
 		buf_dir: wd.join("buffer"),
@@ -108,18 +114,15 @@ async fn run(config: AppConfig) {
 	fs::create_dir_all(&ctx.data_dir).unwrap();
 	fs::create_dir_all(&ctx.buf_dir).unwrap();
 
-	let public_routes = Router::new()
-		.route("/s/:hash", get(download))
-		.route("/login", post(login));
-
 	let mut admin_routes = Router::new()
-		.route("/", post(upload));
+		.route("/api", post(login));
 
 	if let Some(password) = config.password {
 		admin_routes = admin_routes.route_layer(middleware::from_fn_with_state(password, auth));
 	}
 
-	let app = public_routes.merge(admin_routes)
+	let app = admin_routes
+		.nest("/s/image", manual_bucket())
 		.with_state(ctx)
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
@@ -131,7 +134,7 @@ async fn run(config: AppConfig) {
 	// 	app = app.layer(RequestBodyLimitLayer::new(size));
 	// }
 
-	let addr = config.bind.unwrap_or(SocketAddr::from(([127, 0, 0, 1], 3000)));
+	let addr = config.bind.unwrap_or(SocketAddr::from(([127, 0, 0, 1], 6319)));
 	log::info!("LW-OSS is listening on {}", addr);
 	Server::bind(&addr).serve(app.into_make_service()).await.unwrap();
 }
