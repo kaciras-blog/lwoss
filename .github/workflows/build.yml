@@ -1,9 +1,9 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - master
+  create:
+    tags:
+      - v*
 
 # The built-in images already contain the appropriate versions of Node and Python.
 # For more details, see https://github.com/actions/runner-images
@@ -25,6 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - run: cargo build --release
 
