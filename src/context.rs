@@ -23,6 +23,9 @@ pub struct OSSContext {
 }
 
 impl OSSContext {
+
+	/// 接收上传的对象到临时文件，并计算 Hash，稍后可以决定是否保存。
+	/// 这样能避免过大的文件消耗内存，适用于不需要在程序内处理的情况。
 	pub async fn receive_file(&self, body: BodyStream) -> Result<FileBuf, axum::Error> {
 		return FileBuf::receive(self, body).await;
 	}
@@ -32,6 +35,28 @@ pub struct FileBuf {
 	target: PathBuf,
 
 	pub file: NamedTempFile,
+
+	/// 20 个字符的 URL-Safe base64 字符串，是文件的 Hash。
+	///
+	/// 之所以选择 20 个字符，是因为它有 120 bit，接近原始输出 128，
+	/// 且能被 6(base64) 和 8(byte) 整除。
+	///
+	/// 【大小写与文件系统】
+	/// base64 是大小写敏感的，但有些文件系统不敏感（HFS+, exFAT, ...），
+	/// 在这些系统上，base64 每个字符的种类由 64 降为 38，通过计算：
+	///
+	///   log(2, pow(38, N)) / log(2, pow(64, N))
+	/// = log(38) / log(64)
+	/// ≈ 0.875
+	///
+	/// 可以得出，此时 base64 有效位数降低为原来的 0.875 倍，
+	/// 也就是从 120 bit 降低为 104.95 bit，碰撞几率仍然很低。
+	///
+	/// 由生日问题可以得出，104 bit 需要一千四百亿输入才能达到一亿分之一的碰撞率。
+	/// https://en.wikipedia.org/wiki/Birthday_attack
+	///
+	/// 【为什么不用 Hex】
+	/// 我有强迫症，能省几个字符坚决不用更长的，而且文件名太长也不好看。
 	pub hash: String,
 }
 
@@ -41,8 +66,10 @@ pub struct FileBuf {
 impl FileBuf {
 
 	// Create temp file in the same drive as data folder to avoid copy on rename.
-	async fn receive(state: &OSSContext, mut body: BodyStream) -> Result<FileBuf, axum::Error> {
-		let mut file = NamedTempFile::new_in(&state.buf_dir).unwrap();
+	async fn receive(ctx: &OSSContext, mut body: BodyStream) -> Result<FileBuf, axum::Error> {
+		let mut file = NamedTempFile::new_in(&ctx.buf_dir).unwrap();
+
+		// 非加密 Hash 速度快，但有恶意碰撞的风险，在允许公开上传时需要注意。
 		let mut hasher = Xxh3::new();
 
 		while let Some(chunk) = body.next().await {
@@ -54,10 +81,11 @@ impl FileBuf {
 		let hash = hasher.digest128().to_be_bytes();
 		let hash = general_purpose::URL_SAFE_NO_PAD.encode(&hash[..15]);
 
-		return Ok(FileBuf { hash, file, target: state.data_dir.clone() });
+		return Ok(FileBuf { hash, file, target: ctx.data_dir.clone() });
 	}
 
 	pub fn save(self) -> Result<File, PersistError> {
+		log::debug!("New file saved, hash={}", self.hash);
 		return self.file.persist(self.target.join(self.hash));
 	}
 }

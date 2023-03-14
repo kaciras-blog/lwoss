@@ -31,7 +31,14 @@ pub async fn send_file(headers: HeaderMap, path: impl AsRef<Path>, mime: &str) -
 	}
 }
 
+/// 发送一个文件，支持 206 Partial Content。
+/// 暂时无法发送多段，因为实现起来复杂些，而且没见过这种请求，如果遇到了再考虑。
+///
+/// https://tools.ietf.org/html/rfc7233#section-4.1
+///
+/// 代码参考了：
 /// https://github.com/tower-rs/tower-http/blob/master/tower-http/src/services/fs/serve_dir/future.rss
+///
 async fn send(headers: HeaderMap, file: File, attrs: Metadata, mime: &str) -> Response {
 	let builder = Response::builder()
 		.header("Accept-Ranges", "bytes")

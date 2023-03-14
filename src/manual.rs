@@ -6,7 +6,23 @@ use axum::routing::{get, post};
 use log;
 
 use crate::context::{OSSContext, UploadVO};
-use crate::range::send_file_range;
+use crate::range::send_file;
+
+/*
+ * 【文件的多层封装】
+ * 一个文件可能有多层封装，如果只看浏览器支持的，最多有三层，以视频为例：
+ * 1）最内层是视频流的编码，比如 H.264、HEVC、AV1。
+ * 2）容器格式，比如 mp4、webm、mkv。
+ * 3）打包压缩（虽然视频很少用），比如 gzip、br。
+ *
+ * HTTP 协议仅支持后两者，即 Accept 和 Accept-Encoding，而最内层的编码却没有对应的头部。
+ * 如果要原生使用，通常是在 HTML 靠 <source> 标签选择，但这与本项目的后端选择策略相悖。
+ *
+ * 目前的想法是在前端检测支持的程度，然后加入请求头。
+ * 这部分比较复杂，因为编码还可以细分各种 Profile，实现可以参考：
+ * https://cconcolato.github.io/media-mime-support
+ * https://evilmartians.com/chronicles/better-web-video-with-av1-codec
+ */
 
 /**
  * 多版本存储策略，支持上传同一个资源的多个版本，下载时自动选择最优的。
@@ -26,6 +42,9 @@ use crate::range::send_file_range;
  * 需要注意视频转码是有损的，这意味着难以检测上传的多个版本是否包含相同的内容，
  * 如果上传了不同的视频作为变体，则不同的浏览器可能访问到不同的内容。
  */
+pub fn manual_bucket() -> Router<OSSContext> {
+	return Router::new().route("/", post(upload)).route("/:hash", get(download));
+}
 
 struct ManualBucket {
 	ctx: OSSContext,
@@ -43,9 +62,5 @@ async fn upload(ctx: State<OSSContext>, body: BodyStream) -> Response {
 
 async fn download(ctx: State<OSSContext>, Path(hash): Path<String>, headers: HeaderMap) -> Response {
 	let path = ctx.data_dir.join(hash);
-	send_file_range(headers, path, String::from("image/png")).await
-}
-
-pub fn manual_bucket() -> Router<OSSContext> {
-	return Router::new().route("/", post(upload)).route("/:hash", get(download));
+	return send_file(headers, path, "image/png").await;
 }

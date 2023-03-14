@@ -1,7 +1,6 @@
 use std::env;
 use std::error::Error;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -172,6 +171,7 @@ async fn auth<B>(
 }
 
 // https://github.com/tokio-rs/axum/blob/main/examples/graceful-shutdown
+#[allow(dead_code)]
 async fn shutdown_signal() {
 	let ctrl_c = async {
 		signal::ctrl_c()
