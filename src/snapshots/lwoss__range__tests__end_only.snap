@@ -1,0 +1,15 @@
+---
+source: src/range.rs
+expression: p
+---
+Parts {
+    status: 206,
+    version: HTTP/1.1,
+    headers: {
+        "accept-ranges": "bytes",
+        "last-modified": "Mon, 15 Jun 2020 10:29:06 GMT",
+        "content-length": "2",
+        "content-type": "text/html",
+        "content-range": "bytes 473-474/475",
+    },
+}
