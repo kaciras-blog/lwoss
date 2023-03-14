@@ -532,7 +532,6 @@ dependencies = [
  "cookie",
  "diesel",
  "futures",
- "http-body",
  "http-range-header",
  "httpdate",
  "log",
