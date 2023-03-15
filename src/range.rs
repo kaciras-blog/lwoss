@@ -1,4 +1,5 @@
 use std::fs::Metadata;
+use std::future::Future;
 use std::io;
 use std::io::SeekFrom;
 use std::ops::RangeInclusive;
@@ -14,16 +15,16 @@ use axum::http::header::{
 };
 use axum::http::response::Builder;
 use axum::response::{IntoResponse, Response};
-use futures::{AsyncRead, FutureExt, StreamExt};
+use futures::{AsyncRead, FutureExt, StreamExt, TryFutureExt};
 use http_range_header::parse_range_header;
 use httpdate::{fmt_http_date, parse_http_date};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, Take};
 use tokio_util::io::ReaderStream;
 
-pub enum FileCacheType {
+pub enum FileCache {
 	None,
-	HashedName,
+	Hashed(String),
 	Modified,
 }
 
@@ -42,18 +43,20 @@ pub struct FileRangeReadr {
 }
 
 impl FileRangeReadr {
-	pub async fn new(path: impl AsRef<Path>, mime: &str) -> io::Result<FileRangeReadr> {
+	pub async fn open(path: impl AsRef<Path>, mime: String, cache: FileCache) -> io::Result<Self> {
 		let file = File::open(path).await?;
 		let metadata = file.metadata().await?;
-		let cache = CacheIdentifier::Modified(metadata.modified()?);
-		return Ok(FileRangeReadr { file, metadata, cache, mime: String::from(mime) });
-	}
 
-	pub async fn new_hashed(path: impl AsRef<Path>, hash: String, mime: &str) -> io::Result<FileRangeReadr> {
-		let file = File::open(path).await?;
-		let metadata = file.metadata().await?;
-		let cache = CacheIdentifier::Etag(hash);
-		return Ok(FileRangeReadr { file, metadata, cache, mime: String::from(mime) });
+		let cache = match cache {
+			FileCache::None => CacheIdentifier::None,
+			FileCache::Hashed(hash) => CacheIdentifier::Etag(hash),
+			FileCache::Modified => match metadata.modified() {
+				Err(_) => CacheIdentifier::None,
+				Ok(time) => CacheIdentifier::Modified(time),
+			},
+		};
+
+		return Ok(FileRangeReadr { file, metadata, cache, mime });
 	}
 
 	pub fn size(&self) -> u64 {
@@ -155,11 +158,19 @@ async fn single(builder: Builder, mut reader: FileRangeReadr, x: RangeInclusive<
 
 #[cfg(test)]
 mod tests {
+	use std::io::ErrorKind;
+
 	use axum::body::{BoxBody, HttpBody};
 	use axum::http::HeaderMap;
 	use hyper::body::to_bytes;
 
+	use crate::range::{FileCache, FileRangeReadr, send_range};
+
 	const FILE: &str = "test-files/sendrange.txt";
+
+	async fn stub() -> FileRangeReadr {
+		FileRangeReadr::open(FILE, "text/plain".into(), FileCache::None).await.unwrap()
+	}
 
 	async fn assert_body(actual: BoxBody, expected: &[u8]) {
 		assert_eq!(to_bytes(actual).await.unwrap().as_ref(), expected);
@@ -167,9 +178,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn not_found() {
-		let (p, b) = send_file(HeaderMap::new(), "404", "text/plain").await.into_parts();
-		insta::assert_debug_snapshot!(p);
-		assert_eq!(b.is_end_stream(), true);
+		let result = FileRangeReadr::open("404", "text/plain".into(), FileCache::None).await;
+		assert_eq!(result.err().unwrap().kind(), ErrorKind::NotFound);
 	}
 
 	#[tokio::test]
@@ -177,7 +187,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "foobar".try_into().unwrap());
 
-		let (p, b) = send_file(headers, FILE, "text/plain").await.into_parts();
+		let (p, b) = send_range(headers, stub().await).await.into_parts();
 
 		insta::assert_debug_snapshot!(p);
 		assert_eq!(b.is_end_stream(), true);
@@ -185,8 +195,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn non_range() {
-		let (p, b) = send_file(HeaderMap::new(), FILE, "text/plain").await.into_parts();
-
+		let (p, b) = send_range(HeaderMap::new(), stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, std::fs::read(FILE).unwrap().as_slice()).await;
 	}
@@ -196,8 +205,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=1-3".try_into().unwrap());
 
-		let (p, b) = send_file(headers, FILE, "text/html").await.into_parts();
-
+		let (p, b) = send_range(headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, b"f m").await;
 	}
@@ -207,8 +215,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=470-".try_into().unwrap());
 
-		let (p, b) = send_file(headers, FILE, "text/html").await.into_parts();
-
+		let (p, b) = send_range(headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, b"ead).").await;
 	}
@@ -218,8 +225,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=-2".try_into().unwrap());
 
-		let (p, b) = send_file(headers, FILE, "text/html").await.into_parts();
-
+		let (p, b) = send_range(headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, b").").await;
 	}
@@ -229,7 +235,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=80-83,429-472,294-304".try_into().unwrap());
 
-		let (p, b) = send_file(headers, FILE, "text/html").await.into_parts();
+		let (p, b) = send_range(headers, stub().await).await.into_parts();
 
 		insta::assert_debug_snapshot!(p);
 		assert_eq!(b.is_end_stream(), true);

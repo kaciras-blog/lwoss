@@ -1,3 +1,5 @@
+use std::io::ErrorKind;
+
 use axum::{Json, response::IntoResponse, Router};
 use axum::extract::{BodyStream, Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -8,7 +10,7 @@ use axum::routing::{get, post};
 use log;
 
 use crate::context::{OSSContext, UploadVO};
-use crate::range::{FileRangeReadr, send_range};
+use crate::range::{FileCache, FileRangeReadr, send_range};
 
 /*
  * 【文件的多层封装】
@@ -66,11 +68,16 @@ const IMMUTABLE: &str = "public,max-age=31536000,immutable";
 
 async fn download(ctx: State<OSSContext>, Path(hash): Path<String>, headers: HeaderMap) -> Response {
 	let path = ctx.data_dir.join(&hash);
-	let file = FileRangeReadr::new_hashed(path, hash, "image/png");
-	if let Ok(file) = file.await {
-		let mut response = send_range(headers, file).await;
-		response.headers_mut().append(CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
-		return response;
+	let file = FileRangeReadr::open(path, "image/png".into(), FileCache::Hashed(hash));
+	match file.await {
+		Ok(file) => {
+			let mut response = send_range(headers, file).await;
+			response.headers_mut().append(CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
+			response
+		}
+		Err(e) => match e.kind() {
+			ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
+			_ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+		}
 	}
-	return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 }
