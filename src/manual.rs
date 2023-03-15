@@ -1,12 +1,14 @@
 use axum::{Json, response::IntoResponse, Router};
 use axum::extract::{BodyStream, Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
+use axum::http::header::CACHE_CONTROL;
+use axum::http::HeaderValue;
 use axum::response::Response;
 use axum::routing::{get, post};
 use log;
 
 use crate::context::{OSSContext, UploadVO};
-use crate::range::send_file;
+use crate::range::{FileRangeReadr, send_range};
 
 /*
  * 【文件的多层封装】
@@ -54,13 +56,21 @@ struct ManualBucket {
 async fn upload(ctx: State<OSSContext>, body: BodyStream) -> Response {
 	let buf = ctx.receive_file(body).await.unwrap();
 	let hash = buf.hash.clone();
-	log::trace!("hash is {}", hash);
+	log::trace!("New file saved, hash={}", hash);
 
 	buf.save().unwrap();
 	return Json(UploadVO { hash }).into_response();
 }
 
+const IMMUTABLE: &str = "public,max-age=31536000,immutable";
+
 async fn download(ctx: State<OSSContext>, Path(hash): Path<String>, headers: HeaderMap) -> Response {
-	let path = ctx.data_dir.join(hash);
-	return send_file(headers, path, "image/png").await;
+	let path = ctx.data_dir.join(&hash);
+	let file = FileRangeReadr::new_hashed(path, hash, "image/png");
+	if let Ok(file) = file.await {
+		let mut response = send_range(headers, file).await;
+		response.headers_mut().append(CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
+		return response;
+	}
+	return StatusCode::INTERNAL_SERVER_ERROR.into_response();
 }

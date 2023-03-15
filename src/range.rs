@@ -1,33 +1,75 @@
 use std::fs::Metadata;
-use std::io::{ErrorKind, SeekFrom};
+use std::io;
+use std::io::SeekFrom;
 use std::ops::RangeInclusive;
 use std::path::Path;
+use std::time::SystemTime;
 
 use axum::body::{Empty, HttpBody, StreamBody};
 use axum::http::{HeaderMap, StatusCode};
+use axum::http::header::{
+	ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE,
+	CONTENT_TYPE, ETAG, IF_NONE_MATCH,
+	IF_UNMODIFIED_SINCE, LAST_MODIFIED, RANGE,
+};
 use axum::http::response::Builder;
 use axum::response::{IntoResponse, Response};
-use futures::{FutureExt, StreamExt};
+use futures::{AsyncRead, FutureExt, StreamExt};
 use http_range_header::parse_range_header;
-use httpdate::fmt_http_date;
+use httpdate::{fmt_http_date, parse_http_date};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, Take};
 use tokio_util::io::ReaderStream;
 
-pub async fn send_file(headers: HeaderMap, path: impl AsRef<Path>, mime: &str) -> Response {
-	match File::open(path).await {
-		Ok(file) => {
-			match file.metadata().await {
-				Ok(attrs) => send(headers, file, attrs, mime).await,
-				Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response()
-			}
-		}
-		Err(e) => {
-			if e.kind() == ErrorKind::NotFound {
-				return StatusCode::NOT_FOUND.into_response();
-			}
-			return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-		}
+pub enum FileCacheType {
+	None,
+	HashedName,
+	Modified,
+}
+
+pub enum CacheIdentifier {
+	None,
+	Etag(String),
+	Modified(SystemTime),
+}
+
+pub struct FileRangeReadr {
+	file: File,
+	metadata: Metadata,
+
+	pub mime: String,
+	pub cache: CacheIdentifier,
+}
+
+impl FileRangeReadr {
+	pub async fn new(path: impl AsRef<Path>, mime: &str) -> io::Result<FileRangeReadr> {
+		let file = File::open(path).await?;
+		let metadata = file.metadata().await?;
+		let cache = CacheIdentifier::Modified(metadata.modified()?);
+		return Ok(FileRangeReadr { file, metadata, cache, mime: String::from(mime) });
+	}
+
+	pub async fn new_hashed(path: impl AsRef<Path>, hash: String, mime: &str) -> io::Result<FileRangeReadr> {
+		let file = File::open(path).await?;
+		let metadata = file.metadata().await?;
+		let cache = CacheIdentifier::Etag(hash);
+		return Ok(FileRangeReadr { file, metadata, cache, mime: String::from(mime) });
+	}
+
+	pub fn size(&self) -> u64 {
+		return self.metadata.len();
+	}
+
+	pub fn get_whole(self) -> ReaderStream<File> {
+		return ReaderStream::new(self.file);
+	}
+
+	pub async fn get_range(mut self, range: RangeInclusive<u64>) -> ReaderStream<Take<File>> {
+		let size = range.end() - range.start() + 1;
+
+		// There is only one seek in progress, so it don't return Err.
+		self.file.seek(SeekFrom::Start(*range.start())).await.unwrap();
+		return ReaderStream::new(self.file.take(size));
 	}
 }
 
@@ -37,24 +79,51 @@ pub async fn send_file(headers: HeaderMap, path: impl AsRef<Path>, mime: &str) -
 /// https://tools.ietf.org/html/rfc7233#section-4.1
 ///
 /// 代码参考了：
-/// https://github.com/tower-rs/tower-http/blob/master/tower-http/src/services/fs/serve_dir/future.rss
+/// https://github.com/tower-rs/tower-http/blob/master/tower-http/src/services/fs/serve_dir/future.rs
 ///
-async fn send(headers: HeaderMap, file: File, attrs: Metadata, mime: &str) -> Response {
-	let builder = Response::builder()
-		.header("Accept-Ranges", "bytes")
-		.header("Last-Modified", fmt_http_date(attrs.modified().unwrap()));
+pub async fn send_range(headers: HeaderMap, mut reader: FileRangeReadr) -> Response {
+	let mut builder = Response::builder().header(ACCEPT_RANGES, "bytes");
 
-	if let Some(value) = headers.get("Range") {
+	// Cache-Control is added by middleware,
+	builder = match &reader.cache {
+
+		// https://developer.mozilla.org/docs/Web/HTTP/Headers/ETag
+		CacheIdentifier::Etag(value) => {
+			let x = headers.get(IF_NONE_MATCH)
+				.and_then(|v| v.to_str().ok());
+
+			if x == Some(&value) {
+				return StatusCode::NOT_MODIFIED.into_response();
+			}
+			builder.header(ETAG, value)
+		}
+
+		// https://developer.mozilla.org/docs/Web/HTTP/Headers/Last-Modified
+		CacheIdentifier::Modified(time) => {
+			let x = headers.get(IF_UNMODIFIED_SINCE)
+				.and_then(|v| v.to_str().ok())
+				.and_then(|v| parse_http_date(v).ok());
+
+			if x == Some(*time) {
+				return StatusCode::NOT_MODIFIED.into_response();
+			}
+
+			builder.header(LAST_MODIFIED, fmt_http_date(*time))
+		}
+
+		CacheIdentifier::None => builder, // Cache disabled or not available.
+	};
+
+	if let Some(value) = headers.get(RANGE) {
 		// Use option chain to handle various type of errors.
 		let ranges = value.to_str().ok()
 			.map(|s| s.to_owned())
 			.and_then(|s| parse_range_header(&s).ok())
-			.and_then(|r| r.validate(attrs.len()).ok());
+			.and_then(|r| r.validate(reader.size()).ok());
 
 		if let Some(ranges) = ranges {
 			if ranges.len() == 1 {
-				let range = ranges[0].to_owned();
-				return single(builder, file, attrs, range, mime).await;
+				return single(builder, reader, ranges[0].to_owned()).await;
 			}
 			log::warn!("Can not handle request with multiple ranges.")
 		}
@@ -63,29 +132,25 @@ async fn send(headers: HeaderMap, file: File, attrs: Metadata, mime: &str) -> Re
 		let empty = Empty::new().map_err(|e| match e {});
 		builder
 			.status(StatusCode::RANGE_NOT_SATISFIABLE)
-			.header("Content-Range", format!("bytes */{}", attrs.len()))
+			.header(CONTENT_RANGE, format!("bytes */{}", reader.size()))
 			.body(empty.boxed_unsync()).unwrap()
 	} else {
 		// No Range header in the request，send whole file.
 		builder
-			.header("Content-Length", attrs.len())
-			.header("Content-Type", mime)
-			.body(StreamBody::new(ReaderStream::new(file)).boxed_unsync()).unwrap()
+			.header(CONTENT_LENGTH, reader.size())
+			.header(CONTENT_TYPE, &reader.mime)
+			.body(StreamBody::new(reader.get_whole()).boxed_unsync()).unwrap()
 	}
 }
 
-async fn single(builder: Builder, mut file: File, attrs: Metadata, x: RangeInclusive<u64>, mime: &str) -> Response {
-	let size = x.end() - x.start() + 1;
-
-	// There is only one seek in progress, so it don't return Err.
-	file.seek(SeekFrom::Start(*x.start())).await.unwrap();
-	let reader = ReaderStream::new(file.take(size));
+async fn single(builder: Builder, mut reader: FileRangeReadr, x: RangeInclusive<u64>) -> Response {
+	let length = x.end() - x.start() + 1;
 
 	builder.status(StatusCode::PARTIAL_CONTENT)
-		.header("Content-Length", size)
-		.header("Content-Type", mime)
-		.header("Content-Range", format!("bytes {}-{}/{}", x.start(), x.end(), attrs.len()))
-		.body(StreamBody::new(reader).boxed_unsync()).unwrap()
+		.header(CONTENT_RANGE, format!("bytes {}-{}/{}", x.start(), x.end(), reader.size()))
+		.header(CONTENT_LENGTH, length)
+		.header(CONTENT_TYPE, &reader.mime)
+		.body(StreamBody::new(reader.get_range(x).await).boxed_unsync()).unwrap()
 }
 
 #[cfg(test)]
@@ -93,8 +158,6 @@ mod tests {
 	use axum::body::{BoxBody, HttpBody};
 	use axum::http::HeaderMap;
 	use hyper::body::to_bytes;
-
-	use crate::range::send_file;
 
 	const FILE: &str = "test-files/sendrange.txt";
 
