@@ -2,7 +2,7 @@ use std::io::ErrorKind;
 
 use axum::{Json, response::IntoResponse, Router};
 use axum::extract::{BodyStream, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderName, StatusCode};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::HeaderValue;
 use axum::response::Response;
@@ -46,17 +46,28 @@ use crate::range::{FileCache, FileRangeReadr, send_range};
  * 需要注意视频转码是有损的，这意味着难以检测上传的多个版本是否包含相同的内容，
  * 如果上传了不同的视频作为变体，则不同的浏览器可能访问到不同的内容。
  */
-pub fn manual_bucket() -> Router<OSSContext> {
-	return Router::new().route("/", post(upload)).route("/:hash", get(download));
+
+pub fn manual_bucket<OS>(ctx: OSSContext) -> Router<OS> {
+	return Router::new()
+		.route("/:hash", get(download))
+		.route("/", post(upload))
+		.with_state(ManualBucket { ctx: ctx.clone() });
 }
 
-struct ManualBucket {
-	ctx: OSSContext,
-
+pub enum CodecDetect {
+	Param(String),
+	Header(HeaderName),
 }
 
-async fn upload(ctx: State<OSSContext>, body: BodyStream) -> Response {
-	let buf = ctx.receive_file(body).await.unwrap();
+#[derive(Clone)]
+pub struct ManualBucket {
+	// detect: CodecDetect,
+	// codecs: Vec<(String, String)>,
+	pub ctx: OSSContext,
+}
+
+async fn upload(state: State<ManualBucket>, body: BodyStream) -> Response {
+	let buf = state.ctx.receive_file(body).await.unwrap();
 	let hash = buf.hash.clone();
 	log::trace!("New file saved, hash={}", hash);
 
@@ -66,8 +77,8 @@ async fn upload(ctx: State<OSSContext>, body: BodyStream) -> Response {
 
 const IMMUTABLE: &str = "public,max-age=31536000,immutable";
 
-async fn download(ctx: State<OSSContext>, Path(hash): Path<String>, headers: HeaderMap) -> Response {
-	let path = ctx.data_dir.join(&hash);
+async fn download(state: State<ManualBucket>, Path(hash): Path<String>, headers: HeaderMap) -> Response {
+	let path = state.ctx.data_dir.join(&hash);
 	let file = FileRangeReadr::open(path, "image/png".into(), FileCache::Hashed(hash));
 	match file.await {
 		Ok(file) => {

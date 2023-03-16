@@ -121,7 +121,7 @@ async fn run(config: AppConfig) {
 	}
 
 	let app = admin_routes
-		.nest("/s/image", manual_bucket())
+		.nest("/s/image", manual_bucket(ctx.clone()))
 		.with_state(ctx)
 		.layer(CorsLayer::new()
 			.allow_origin(AllowOrigin::mirror_request())
