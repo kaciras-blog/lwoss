@@ -28,7 +28,6 @@ use crate::static_files::serve_static;
 mod context;
 mod range;
 mod api;
-mod encode;
 mod manual;
 mod static_files;
 
