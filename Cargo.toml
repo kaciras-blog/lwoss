@@ -21,10 +21,11 @@ axum = { version = "0.6", features = ["http2"] }
 axum-extra = { version = "0.7", features = ["cookie"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
-tower-http = { version = "0.4", features = ["cors", "limit"] }
+tower-http = { version = "0.4", features = ["cors", "limit", "set-header"] }
 serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 diesel = { version = "2", features = ["sqlite"] }
+mime_guess = { version = "2", default_features = false }
 
 [dev-dependencies]
 insta = "1"

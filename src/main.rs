@@ -23,11 +23,14 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use crate::api::login;
 use crate::context::OSSContext;
 use crate::manual::manual_bucket;
+use crate::static_files::serve_static;
 
 mod context;
 mod range;
 mod api;
+mod encode;
 mod manual;
+mod static_files;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -121,6 +124,7 @@ async fn run(config: AppConfig) {
 	}
 
 	let app = admin_routes
+		.merge(serve_static("web/build".into(), Some("web/build/index.html".into())))
 		.nest("/s/image", manual_bucket(ctx.clone()))
 		.with_state(ctx)
 		.layer(CorsLayer::new()

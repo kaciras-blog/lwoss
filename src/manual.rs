@@ -82,7 +82,7 @@ async fn download(state: State<ManualBucket>, Path(hash): Path<String>, headers:
 	let file = FileRangeReadr::open(path, "image/png".into(), FileCache::Hashed(hash));
 	match file.await {
 		Ok(file) => {
-			let mut response = send_range(headers, file).await;
+			let mut response = send_range(&headers, file).await;
 			response.headers_mut().append(CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
 			response
 		}

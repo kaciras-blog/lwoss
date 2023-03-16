@@ -1,7 +1,7 @@
 use std::fs::Metadata;
 use std::future::Future;
 use std::io;
-use std::io::SeekFrom;
+use std::io::{ErrorKind, SeekFrom};
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::time::SystemTime;
@@ -76,6 +76,23 @@ impl FileRangeReadr {
 	}
 }
 
+pub async fn send_file(
+	path: impl AsRef<Path>,
+	headers: &HeaderMap,
+	mime: String,
+	cache: FileCache
+) -> Response {
+	match FileRangeReadr::open(path, mime, cache).await {
+		Ok(file) => {
+			send_range(headers, file).await
+		}
+		Err(e) => match e.kind() {
+			ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
+			_ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+		}
+	}
+}
+
 /// 发送一个文件，支持 206 Partial Content。
 /// 暂时无法发送多段，因为实现起来复杂些，而且没见过这种请求，如果遇到了再考虑。
 ///
@@ -84,7 +101,7 @@ impl FileRangeReadr {
 /// 代码参考了：
 /// https://github.com/tower-rs/tower-http/blob/master/tower-http/src/services/fs/serve_dir/future.rs
 ///
-pub async fn send_range(headers: HeaderMap, mut reader: FileRangeReadr) -> Response {
+pub async fn send_range(headers: &HeaderMap, mut reader: FileRangeReadr) -> Response {
 	let mut builder = Response::builder().header(ACCEPT_RANGES, "bytes");
 
 	// Cache-Control is added by middleware,
@@ -110,7 +127,6 @@ pub async fn send_range(headers: HeaderMap, mut reader: FileRangeReadr) -> Respo
 			if x == Some(*time) {
 				return StatusCode::NOT_MODIFIED.into_response();
 			}
-
 			builder.header(LAST_MODIFIED, fmt_http_date(*time))
 		}
 
@@ -182,12 +198,14 @@ mod tests {
 		assert_eq!(result.err().unwrap().kind(), ErrorKind::NotFound);
 	}
 
+	// ============================= Range =============================
+
 	#[tokio::test]
 	async fn invalid_range() {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "foobar".try_into().unwrap());
 
-		let (p, b) = send_range(headers, stub().await).await.into_parts();
+		let (p, b) = send_range(&headers, stub().await).await.into_parts();
 
 		insta::assert_debug_snapshot!(p);
 		assert_eq!(b.is_end_stream(), true);
@@ -195,7 +213,8 @@ mod tests {
 
 	#[tokio::test]
 	async fn non_range() {
-		let (p, b) = send_range(HeaderMap::new(), stub().await).await.into_parts();
+		let headers = HeaderMap::new();
+		let (p, b) = send_range(&headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, std::fs::read(FILE).unwrap().as_slice()).await;
 	}
@@ -205,7 +224,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=1-3".try_into().unwrap());
 
-		let (p, b) = send_range(headers, stub().await).await.into_parts();
+		let (p, b) = send_range(&headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, b"f m").await;
 	}
@@ -215,7 +234,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=470-".try_into().unwrap());
 
-		let (p, b) = send_range(headers, stub().await).await.into_parts();
+		let (p, b) = send_range(&headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, b"ead).").await;
 	}
@@ -225,7 +244,7 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=-2".try_into().unwrap());
 
-		let (p, b) = send_range(headers, stub().await).await.into_parts();
+		let (p, b) = send_range(&headers, stub().await).await.into_parts();
 		insta::assert_debug_snapshot!(p);
 		assert_body(b, b").").await;
 	}
@@ -235,9 +254,14 @@ mod tests {
 		let mut headers = HeaderMap::new();
 		headers.append("Range", "bytes=80-83,429-472,294-304".try_into().unwrap());
 
-		let (p, b) = send_range(headers, stub().await).await.into_parts();
+		let (p, b) = send_range(&headers, stub().await).await.into_parts();
 
 		insta::assert_debug_snapshot!(p);
 		assert_eq!(b.is_end_stream(), true);
 	}
+
+	// ============================= caching =============================
+
+	#[tokio::test]
+	async fn etag() {}
 }
