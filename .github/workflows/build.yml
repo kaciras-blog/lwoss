@@ -51,4 +51,4 @@ jobs:
 
       # Deploy to GitHub releases
       - name: Pack assets
-        run: python pack.py
+        run: python .github/actions-rs/pack.py
