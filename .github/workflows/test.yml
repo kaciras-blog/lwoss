@@ -20,7 +20,7 @@ jobs:
 
       - run: cargo test
         env:
-          RUSTFLAGS: '-Cinstrument-coverage'
+          RUSTFLAGS: -Cinstrument-coverage
 
       - uses: actions-rs/grcov@v0.1
 
