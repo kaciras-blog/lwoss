@@ -1,11 +1,12 @@
 {
 	"extends": "./.svelte-kit/tsconfig.json",
 	"compilerOptions": {
-		"sourceMap": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
 		"strict": true,
 		"allowJs": true,
 		"resolveJsonModule": true,
 		"skipLibCheck": true,
-		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
 	}
 }

@@ -10,9 +10,7 @@ import FileDrop from "$lib/FileDrop.svelte";
 let taskSize = 0;
 let progress = 0;
 
-async function handleFileInput(event: InputEvent) {
-	const { files } = event.target as HTMLInputElement;
-
+async function handleFileInput(files: File[]) {
 	taskSize = files.length;
 
 	for (const file of files) {

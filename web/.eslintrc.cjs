@@ -1,18 +1,21 @@
 module.exports = {
 	root: true,
-	extends: ["@kaciras/core", "@kaciras/typescript/base"],
-	plugins: ["svelte3"],
+	extends: [
+		"@kaciras/core",
+		"@kaciras/typescript/base",
+		'plugin:svelte/recommended'
+	],
 	parserOptions: {
-		extraFileExtensions: [".svelte"],
+		extraFileExtensions: ['.svelte']
 	},
 	env: {
 		browser: true,
 	},
 	overrides: [{
-		files: ["*.svelte"],
-		processor: "svelte3/svelte3",
-	}],
-	settings: {
-		"svelte3/typescript": () => require("typescript"),
-	},
+		files: ['*.svelte'],
+		parser: 'svelte-eslint-parser',
+		parserOptions: {
+			parser: '@typescript-eslint/parser'
+		}
+	}]
 };
